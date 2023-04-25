@@ -104,28 +104,49 @@ const isCommittedByHuman = (commits: Array<CommitNode>): boolean => {
   });
 };
 
-export const run = async (): Promise<void> => {
-  const ghToken = core.getInput("github_token");
-  const octokit = github.getOctokit(ghToken);
-  const repo = getCurrentRepo();
-  const queryString = createStaleFailingRenovatePRQuery();
-  core.info("Fetching pull requests");
-  core.info("With query: " + queryString);
+async function closePullRequest(
+  octokit: ReturnType<typeof github.getOctokit>,
+  repo: string,
+  pullNumber: number
+): Promise<void> {
+  await octokit.rest.pulls.update({
+    owner: repo.split("/")[0],
+    repo: repo.split("/")[1],
+    pull_number: pullNumber,
+    state: "closed",
+  });
+}
 
+async function deleteRef(
+  octokit: ReturnType<typeof github.getOctokit>,
+  repo: string,
+  refName: string
+): Promise<void> {
+  await octokit.rest.git
+    .deleteRef({
+      owner: repo.split("/")[0],
+      repo: repo.split("/")[1],
+      ref: `heads/${refName}`,
+    })
+    .catch((e) => {
+      core.info(`Failed to delete ref: ref=${refName}: ${e}`);
+    });
+}
+
+async function fetchStaleFailingRenovatePRs(
+  octokit: ReturnType<typeof github.getOctokit>,
+  queryString: string
+): Promise<Array<SearchResultNode>> {
   const result: SearchRespPRs = await octokit.graphql(
     `
     query SearchStaleFailingRenovatePR($queryString: String!) {
       search(query: $queryString, type: ISSUE, last: 100) {
-        issueCount
         nodes {
           ... on PullRequest {
             number
             title
             url
             headRefName
-            author {
-              login
-            }
             commits(last: 100) {
               nodes {
                 commit {
@@ -153,37 +174,33 @@ export const run = async (): Promise<void> => {
     }
   );
 
-  // Filter out PRs that are commented or committed by human
-  result.search.nodes = result.search.nodes.filter((node) => {
+  return result.search.nodes;
+}
+
+export const run = async (): Promise<void> => {
+  const ghToken = core.getInput("github_token");
+  const octokit = github.getOctokit(ghToken);
+  const repo = getCurrentRepo();
+  const queryString = createStaleFailingRenovatePRQuery();
+  core.info("Fetching pull requests");
+
+  const prNodes = await fetchStaleFailingRenovatePRs(octokit, queryString);
+
+  const stalePRs = prNodes.filter((node) => {
     return (
       !isCommentedByHuman(node.comments.nodes) &&
       !isCommittedByHuman(node.commits.nodes)
     );
   });
 
-  core.info(`The number of pull requests: ${result.search.nodes.length}`);
-  for (let i = 0; i < result.search.nodes.length; i++) {
-    const node = result.search.nodes[i];
+  core.info(`The number of pull requests: ${stalePRs.length}`);
+  for (const pr of stalePRs) {
     core.info(
-      `Close a pull request: title=${node.title} number=${node.number} url=${node.url}`
+      `Closing pull request: title=${pr.title} number=${pr.number} url=${pr.url}`
     );
-    await octokit.rest.pulls.update({
-      owner: repo.split("/")[0],
-      repo: repo.split("/")[1],
-      pull_number: node.number,
-      state: "closed",
-    });
-    core.info(`Delete a ref: title=${node.title} ref=${node.headRefName}`);
-    await octokit.rest.git
-      .deleteRef({
-        owner: repo.split("/")[0],
-        repo: repo.split("/")[1],
-        ref: `heads/${node.headRefName}`,
-      })
-      .catch((e) => {
-        core.info(
-          `Failed to delete a ref: title=${node.title} ref=${node.headRefName}: ${e}`
-        );
-      });
+    await closePullRequest(octokit, repo, pr.number);
+
+    core.info(`Deleting ref: title=${pr.title} ref=${pr.headRefName}`);
+    await deleteRef(octokit, repo, pr.headRefName);
   }
 };
