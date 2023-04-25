@@ -48,11 +48,11 @@ function getCurrentRepo(): string {
   return process.env.GITHUB_REPOSITORY;
 }
 
-function formatDate(date: Date): string {
+export function formatDate(date: Date): string {
   return `${date.toISOString().slice(0, -5)}+00:00`;
 }
 
-function createSearchPRQuery(
+export function createSearchPRQuery(
   repo: string,
   author: string,
   createdBefore: Date,
@@ -63,7 +63,7 @@ function createSearchPRQuery(
   const created = formatDate(createdBefore);
   let query = `type:pr repo:${repo} author:${author} created:<=${created} state:${prState} status:${ciStatus}`;
 
-  return (query + additionalFilter).trim();
+  return `${query} ${additionalFilter}`.trim();
 }
 
 // Stale failing renovate PR is
@@ -71,9 +71,8 @@ function createSearchPRQuery(
 // 2. stay open for >= 7 day
 // 3  CI status is failed
 // Example: repo:wantedly/wantedly-frontend type:pr author:app/renovate state:open status:failure
-function createStaleFailingRenovatePRQuery() {
+export function createStaleFailingRenovatePRQuery(repo: string) {
   const author = "app/renovate";
-  const repo = getCurrentRepo();
   const createdBefore = new Date();
   createdBefore.setDate(createdBefore.getDate() - 7);
   const additionalFilter = "";
@@ -92,13 +91,13 @@ function createStaleFailingRenovatePRQuery() {
 
 const BOT_LOGINS = ["renovate[bot]", "github-actions", "jjenko"];
 
-const isCommentedByHuman = (comments: Array<CommentNode>): boolean => {
+export const isCommentedByHuman = (comments: Array<CommentNode>): boolean => {
   return comments.some((comment) => {
     return !BOT_LOGINS.includes(comment.author.login);
   });
 };
 
-const isCommittedByHuman = (commits: Array<CommitNode>): boolean => {
+export const isCommittedByHuman = (commits: Array<CommitNode>): boolean => {
   return commits.some((commit) => {
     return !BOT_LOGINS.includes(commit.commit.author.user.login);
   });
@@ -181,7 +180,7 @@ export const run = async (): Promise<void> => {
   const ghToken = core.getInput("github_token");
   const octokit = github.getOctokit(ghToken);
   const repo = getCurrentRepo();
-  const queryString = createStaleFailingRenovatePRQuery();
+  const queryString = createStaleFailingRenovatePRQuery(repo);
   core.info("Fetching pull requests");
 
   const prNodes = await fetchStaleFailingRenovatePRs(octokit, queryString);
