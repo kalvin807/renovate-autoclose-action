@@ -14,6 +14,31 @@ interface SearchResultNode {
   title: string;
   url: string;
   headRefName: string;
+  author: {
+    login: string;
+  };
+  commits: {
+    nodes: Array<CommitNode>;
+  };
+  comments: {
+    nodes: Array<CommentNode>;
+  };
+}
+
+interface CommitNode {
+  commit: {
+    author: {
+      user: {
+        login: string;
+      };
+    };
+  };
+}
+
+interface CommentNode {
+  author: {
+    login: string;
+  };
 }
 
 function getCurrentRepo(): string {
@@ -65,6 +90,20 @@ function createStaleFailingRenovatePRQuery() {
   );
 }
 
+const BOT_LOGINS = ["renovate[bot]", "github-actions", "jjenko"];
+
+const isCommentedByHuman = (comments: Array<CommentNode>): boolean => {
+  return comments.some((comment) => {
+    return !BOT_LOGINS.includes(comment.author.login);
+  });
+};
+
+const isCommittedByHuman = (commits: Array<CommitNode>): boolean => {
+  return commits.some((commit) => {
+    return !BOT_LOGINS.includes(commit.commit.author.user.login);
+  });
+};
+
 export const run = async (): Promise<void> => {
   const ghToken = core.getInput("github_token");
   const octokit = github.getOctokit(ghToken);
@@ -113,6 +152,14 @@ export const run = async (): Promise<void> => {
       queryString,
     }
   );
+
+  // Filter out PRs that are commented or committed by human
+  result.search.nodes = result.search.nodes.filter((node) => {
+    return (
+      !isCommentedByHuman(node.comments.nodes) &&
+      !isCommittedByHuman(node.commits.nodes)
+    );
+  });
 
   core.info(`The number of pull requests: ${result.search.nodes.length}`);
   for (let i = 0; i < result.search.nodes.length; i++) {
